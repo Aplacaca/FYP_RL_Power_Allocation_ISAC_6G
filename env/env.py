@@ -194,18 +194,18 @@ class BS(object):
         SUM_COMA = np.identity(self.N_t,dtype=np.complex128)*self.P_n
         for _id in range(len(self.s_UE)):
             UE = self.s_UE[_id]
-            SUM_COMA += UE.g**4*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate())
+            SUM_COMA += UE.P_s**2*UE.g**4*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate())
             # pdb.set_trace()
         for _id in range(len(self.s_UE)):
             UE = self.s_UE[_id]
             UE_ = self.s_UE[0:_id]+self.s_UE[_id+1:]
             P_in = 0 # Total inference signal power (without noise)
-            COMA = SUM_COMA - UE.g**4*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate())
+            COMA = SUM_COMA - UE.P_s**2*UE.g**4*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate())
             UE.u = np.linalg.inv(COMA)@UE.h_r@UE.v@np.linalg.inv(UE.v.transpose().conjugate()@UE.h_r.transpose().conjugate()@np.linalg.inv(COMA)@UE.h_r@UE.v)
             UE.u = UE.u.transpose().conjugate()
             # pdb.set_trace()
             for UE_in in UE_:
-                P_in += (UE_in.g)**2*np.linalg.norm(UE.u@UE_in.h_r@UE.v)*UE.P_s
+                P_in += (UE_in.g)**2*np.linalg.norm(UE.u@UE_in.h_r@UE.v)*UE_in.P_s
             P_useful = (UE.g)**2*np.linalg.norm(UE.u@UE.h_r@UE.v)*UE.P_s
             R_ = duty_factor/(2*T) * np.log2(1 + 4*(np.pi**2)*(sigma**2)*(self.B_s**2)*T*P_useful/(self.P_n*np.linalg.norm(UE.u)+P_in))
             R_est.append(R_)
