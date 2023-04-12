@@ -3,7 +3,7 @@ from copy import deepcopy
 from utils import f_Theta
 
 import pdb
-class BS(object):
+class BS1(object):
     def __init__(self,K=5):
         self.K = K
         self.a1 = np.random.rand(K).astype(np.float128)*10000
@@ -86,25 +86,99 @@ class BS(object):
         duty_factor = 0.1 # Pulse Duration Interval / Pulse Repetition Interval
         T = 0.000001 # 1us
         sigma = 0.01
-        R_est = duty_factor/(2*T) * np.log2(1 + 4*(np.pi**2)*(sigma**2)*(self.B**2)*T*self.g*self.P_s)
+        R_est = duty_factor/(2*T) * np.log2(1 + 4*(np.pi**2)*(sigma**2)*(self.B**2)*T*self.g*self.P_s/self.delta)
         return R_est
     
     def update_channel(self,):
         self.g = np.random.rand(self.K).astype(np.float128)*0.0001
         
+class UE(object):
+    def __init__(self, id, N_r=1, N_t=4, is_s=0, is_c=0):
+        self.id = id
+        self.N_r = N_r
+        self.N_t = N_t
+        self.h = np.random.rand(self.N_r,self.N_t).astype(np.float64)*0.0001 #
+        u_,si,v_h = np.linalg.svd(self.h) # receiver
+        u_h = u_.conjugate().transpose()
+        v = np.expand_dims(v_h[0,:], axis=0).conjugate().transpose()
+        self.h_norm = np.linalg.norm(self.h)
+        self.u = u_h
+        self.v = v
+        self.P_n = np.random.rand()*0.0001 # noise power
+        self.P_c = 0.0 # Downlink Communication power
+        self.P_s = 0.0 # Downlink Sensing power
+        self.is_s = is_s 
+        self.is_c = is_c 
+        # pdb.set_trace()
+        # State:
+        # NOMA Sinr
+        self.Sinr = 0.0 # db
+        # NOMA Rate
+        self.R_c = 0.0 # bps
+
+    def update(self,):
+        self.h = np.random.rand(self.N_r,self.N_t).astype(np.float64)*0.0001 # 
+        u_,si,v_h = np.linalg.svd(self.h) # receiver
+        u_h = u_.conjugate().transpose()
+        v = np.expand_dims(v_h[0,:], axis=0).conjugate().transpose()
+        self.u = u_h
+        self.v = v
+        self.h_norm = np.linalg.norm(self.h)
+
         
 
-if __name__=="__main__":
+class BS(object):
+    def __init__(self, N_t=4, N_c=5, N_s=2):
+        self.c_UE = [UE(id="c"+str(i),N_t=N_t,is_c=1) for i in range(N_c)]  
+        # Sort to H norm descending     
+        self.c_UE.sort(key=lambda x : x.h_norm, reverse = True)
+        self.s_UE = [UE(id="s"+str(i),N_t=N_t,is_s=1) for i in range(N_s)] 
+        self.B_c = 10e+6 # Hz Communication Bandwidth
+        self.B_s = 10e+6 # Hz Sensing Bandwidth
+        # pdb.set_trace()
+
+    def _cal_noma(self, update = True):
+        Sinr = []
+        R_c = []
+        for _id in range(len(self.c_UE)):
+            UE = self.c_UE[_id]
+            UE_in = self.c_UE[0:_id]
+            P_si = np.linalg.norm(UE.H)*UE.P_c
+            P_in = 0.0
+            if len(UE_in) > 0:
+                P_in = np.linalg.norm(UE.H)*sum([UE_.P_c for UE_ in UE_in])
+            Sinr.append(P_si/(P_in+UE.P_n))
+            R_c.append(UE.B_c * np.log2(1+UE.Sinr))
+            if update:
+                UE.Sinr = P_si/(P_in+UE.P_n)
+                UE.R_c = UE.B_c * np.log2(1+UE.Sinr)   
+        return Sinr,R_c  
+
+    def _cal_radar(self, update=True):   
+        ...
+        
+    def update(self,):
+        # Update Communication UE Channel
+        for UE in self.c_UE:
+            UE.update()
+        # Resort NOMA Index
+        self.c_UE.sort(key=lambda x : x.h_norm, reverse = True)
+        # Update Sensing UE Channel
+        for UE in self.s_UE:
+            UE.update()
+        
+
+if __name__ == "__main__":
     np.random.seed(777)
-    env=BS()
-    env.TD_allocate()
-    print("a1:",env.a1)
-    print("a2:",env.a2)
-    print("a3:",env.a3)
-    print("g:",env.g)
-    print("c:",env.c)
-    print("t:",env.t)
-    print("c_rate:",env.communication_rate())
-    print("s_acc:",env.sensing_accuracy())
-    print("RER:",env.radar_estimation_rate())
+    env = BS()
+    # env.TD_allocate()
+    # print("a1:",env.a1)
+    # print("a2:",env.a2)
+    # print("a3:",env.a3)
+    # print("g:",env.g)
+    # print("c:",env.c)
+    # print("t:",env.t)
+    # print("c_rate:",env.communication_rate())
+    # print("s_acc:",env.sensing_accuracy())
+    # print("RER:",env.radar_estimation_rate())
     
