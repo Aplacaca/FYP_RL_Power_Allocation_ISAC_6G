@@ -85,7 +85,7 @@ def train(args):
             loss = agent.optim()
             if loss is not None:
                 cell_writer.add_scalar("train/loss", loss, frame_idx)
-                cell_writer.add_scalar("train/loss", loss, frame_idx)
+                cell_writer.add_scalar("train/reward", reward, frame_idx)
                 for i in range(len(UE)):
                     c_rate = env.communication_rate()
                     acc = env.sensing_accuracy()
