@@ -17,11 +17,6 @@ class BS_TD(object):
         self.a2 = np.random.uniform(low=2.0, high=3.0, size=(K)).astype(np.float64)
         self.a3 = np.random.uniform(low=0.9, high=1.0, size=(K)).astype(np.float64)
         self.g = np.random.rand(K).astype(np.float64)*0.0001
-        #### Predefined
-        # self.a1 = np.array([5.1940, 5.6421, 6.3067, 7.3235, 7.3418], dtype=np.float64)*10000
-        # self.a2 = np.array([2.2633, 2.6584, 2.6519, 2.4226, 2.5756], dtype=np.float64)
-        # self.a3 = np.array([0.9159, 0.9425, 0.9894, 0.9777, 0.9935], dtype=np.float64)
-        # self.g = np.array([0.6592, 0.0454, 0.8506, 0.9347, 0.6819], dtype=np.float64)*0.0001
         # Communication & Sensing Configuration
         self.P_c = 0.5
         self.P_s = 1.0
@@ -38,8 +33,19 @@ class BS_TD(object):
         ##
         y_max_1 = np.floor(self.T_m/self.T_0).astype(np.int64)
         y_max_2 = np.floor(self.E_m/(self.T_0*self.P_s)).astype(np.int64)
-        self.action_space = list(range(200*self.K+1, min(y_max_1,y_max_2)+1, 100))
+        self.action_space = list(range(200*self.K+1, 200*self.K+1+2000, 10))
         self.reward = 0.0
+        
+    def get_EE(self,c=None,t=None):
+        if c is None:
+            ES = self.P_s*np.sum(self.c) + self.P_c*np.sum(self.t)
+            TP_EFF = self.effective_rate()
+        else:
+            ES = self.P_s*np.sum(c) + self.P_c*np.sum(t)
+            TP_EFF = self.effective_rate(c,t) 
+        EE = TP_EFF/ES
+        # pdb.set_trace()
+        return EE*10.0
         
     def TD_allocate(self,update=False):
         c = np.zeros((self.K), dtype=np.float64) + 200
@@ -72,9 +78,10 @@ class BS_TD(object):
         #
         opt_y_value = np.argmax(out)  #find object y which makes object max
         max_out = out[opt_y_value]
-        print(opt_y_value)
+        # print(opt_y_value)
         opt_c_value = np.max(x[0:opt_y_value,:],axis=0)  #the optimal varialble value (c_1,...c_5)
         t_k = 1/self.K * min(self.T_m-self.T_0*opt_y_value, self.E_m/self.P_c-self.P_s/self.P_c*self.T_0*opt_y_value)
+        opt_t_value = np.array([t_k]*self.K)
         #
         if update:
             self.c = deepcopy(opt_c_value)
@@ -82,7 +89,17 @@ class BS_TD(object):
             opt_rate = self.effective_rate()
             print("opt_rate: ",opt_rate)
         else:
-            return opt_y_value
+            opt_rate = self.effective_rate(opt_c_value,opt_t_value)
+            opt_ee = self.get_EE(opt_c_value,opt_t_value)
+            return opt_y_value, opt_rate, opt_ee
+        
+    def equally_allocate(self, rho, update=True):
+        Ts_tot = self.T_m*rho
+        Tc_tot = self.T_m*(1-rho)
+        t_k = (Tc_tot/self.K)
+        c_per_ue = np.floor(Ts_tot/self.T_0/self.K).astype(np.int64) 
+        self.c = np.zeros((self.K), dtype=np.float64) + c_per_ue
+        self.t = np.zeros((self.K), dtype=np.float64) + t_k
         
     def given_y_get_c(self,y_max):
         c = np.zeros((self.K), dtype=np.float64) + 200
@@ -110,12 +127,19 @@ class BS_TD(object):
         self.t = np.array([t_k]*self.K)
         opt_rate = self.effective_rate()
         # print("opt_rate: ",opt_rate)
-        self.reward = opt_rate/100.0
+        self.reward = self.cal_reward(opt_rate)
         return self.c
         
+    def cal_reward(self,opt_rate=0):
+        reward = opt_rate/100.0
+        # reward = self.get_EE()
+        return reward
         
-    def effective_rate(self,):
-        opt_rate = np.sum(np.log(f_Theta(self.a1,self.a2,self.a3,self.c)*(self.t/self.T_m * self.B *np.log2(1+self.g*self.P_c/self.delta))))
+    def effective_rate(self,c=None,t=None):
+        if c is None:
+            opt_rate = np.sum(np.log(f_Theta(self.a1,self.a2,self.a3,self.c)*(self.t/self.T_m * self.B *np.log2(1+self.g*self.P_c/self.delta))))
+        else:
+            opt_rate = np.sum(np.log(f_Theta(self.a1,self.a2,self.a3,c)*(t/self.T_m * self.B *np.log2(1+self.g*self.P_c/self.delta))))
         return opt_rate
         
     def communication_rate(self,):
@@ -135,10 +159,14 @@ class BS_TD(object):
     
     def update_channel(self,):
         self.g = np.random.rand(self.K).astype(np.float64)*0.0001
+        # self.a1 = np.random.rand(self.K).astype(np.float64)*10000
+        # self.a2 = np.random.uniform(low=2.0, high=3.0, size=(self.K)).astype(np.float64)
+        # self.a3 = np.random.uniform(low=0.9, high=1.0, size=(self.K)).astype(np.float64)
         
     def get_state_batch(self, action_id, batch=1):
         # pdb.set_trace()
-        print("action_id",action_id)
+        opt_y = self.TD_allocate(update=False)
+        # print("action",self.action_space[action_id],"opt action",opt_y)
         if isinstance(action_id, np.ndarray):
             action_id = action_id[0]
         action = self.action_space[action_id]
@@ -146,6 +174,7 @@ class BS_TD(object):
         A2 = np.expand_dims(self.a2, axis=0)
         A3 = np.expand_dims(self.a3, axis=0)
         C = self.given_y_get_c(y_max=action)
+        Comm = np.expand_dims(self.B *np.log2(1+self.g*self.P_c/self.delta), axis=0)
         # pdb.set_trace()
         # print(A1.shape)
         return [A1,A2,A3,C]
@@ -316,17 +345,31 @@ if __name__ == "__main__":
     
     
     ###-------------------------------
-    env = BS_TD(logger=None,K=5,seed=777)
-    # env.given_y_get_c(y_max=1900)
-    # env.TD_allocate()
-    print("a1:",env.a1)
-    print("a2:",env.a2)
-    print("a3:",env.a3)
-    print("g:",env.g)
-    print("c:",env.c)
-    print("t:",env.t)
-    print("c_rate:",env.communication_rate())
-    print("s_acc:",env.sensing_accuracy())
-    print("RER:",env.radar_estimation_rate())
-    print(env.get_state_batch(action=1900))
+    # env = BS_TD(logger=None,K=5,seed=777)
+    # # env.given_y_get_c(y_max=1900)
+    # env.TD_allocate(update=True)
+    # env.effective_rate()
+    # env.get_EE()
+    ###-------------------------------
+    eff_rate = []
+    for i in [5,10,15,20,25]:
+        env = BS_TD(logger=None,K=i,seed=777)
+        # env.given_y_get_c(y_max=1900)
+        # env.TD_allocate(update=True)
+        env.equally_allocate(rho=0.7)
+        eff_rate.append(env.effective_rate())
+    
+    # rho = [0.3,0.5,0.7]
+    
+    
+    # print("a1:",env.a1)
+    # print("a2:",env.a2)
+    # print("a3:",env.a3)
+    # print("g:",env.g)
+    # print("c:",env.c)
+    # print("t:",env.t)
+    # print("c_rate:",env.communication_rate())
+    # print("s_acc:",env.sensing_accuracy())
+    # print("RER:",env.radar_estimation_rate())
+    # print(env.get_state_batch(action=1900))
     pdb.set_trace()

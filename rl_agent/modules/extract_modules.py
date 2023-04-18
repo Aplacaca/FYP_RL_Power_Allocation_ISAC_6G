@@ -23,21 +23,13 @@ class State():
 class TDNet(torch.nn.Module):
     '''
     DQN Net
-    Structure:
-        PMI  \
-               HV_features                             \
-        Beam /                                          \
-                                                          joint_layer
-        RI   \                                          /
-        CQI  - layer_hiden_layer1 - layer_hiden_layer2 /
-        TP   /
-
+    
     '''
     def __init__(self, HV_num=2, Layer_num=4):
         super().__init__()
         self.A_F = torch.nn.Linear(15, 8)
         self.C_F = torch.nn.Linear(5, 8)         
-        self.joint_layer = torch.nn.Linear(16, 407) # old: 18; new: 14
+        self.joint_layer = torch.nn.Linear(16, 200) # old: 18; new: 14
         self.relu = torch.nn.ReLU()
         
     def forward(self, state):

@@ -1,0 +1,8 @@
+2023-04-17 20:15:39 - INFO - desc: No desc
+2023-04-17 20:15:39 - INFO - parameters: Namespace(desc='No desc', seed=777, device='cpu', env_max_time=1000, env_nue=5, nUE=5, num_frame=10000, memory_size=5000, max_epsilon=1, min_epsilon=0.1, epsilon_decay=0.0005, batch_size=1, gamma=0.9, lr=0.0001, optim_frame=1, target_update_frame=200, train_log_cycle=100, daytime='BM_2023-04-17-20-15-39')
+2023-04-17 20:15:39 - INFO - NetWork: TDNet(
+  (A_F): Linear(in_features=15, out_features=8, bias=True)
+  (C_F): Linear(in_features=5, out_features=8, bias=True)
+  (joint_layer): Linear(in_features=16, out_features=407, bias=True)
+  (relu): ReLU()
+)

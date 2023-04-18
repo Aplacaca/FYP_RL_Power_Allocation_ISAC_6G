@@ -15,30 +15,7 @@ import pickle
 
 
 def inference(env, agent, inference_ues, start_time, end_time, best_tp):
-    """ 使用模型推理，获得评分
-    Args:
-        env (_type_): 环境实例
-        agent (_type_): agent实例
-        inference_ues (list): 用于推理的UE
-        start_time (_type_): 开始时间
-        end_time (_type_): 结束时间
-        best_tp (_type_): 最好的TP
-        tp_rand (_type_): 随机的TP
-    """
-    time_length = end_time - start_time
-    TPs = np.zeros((len(inference_ues),time_length))
-    inference_action = np.zeros(len(inference_ues), dtype=np.int32)
-    for i in range(0,time_length):
-        times = np.ones_like(inference_ues)*(i+start_time)
-        data = State("cuda", *env.get_state_batch(batch=len(inference_ues), time=times, ue=inference_ues, action=inference_action))
-        result = agent.net(data)
-        selected_action = list(torch.argmax(result, dim=-1).cpu().numpy())
-        inference_action = selected_action
-        env.test = True
-        [_,PMI,CQI,RI,TP] = env.get_state_batch(batch=len(inference_ues), time=times, ue=inference_ues, action=inference_action)
-        env.test = False
-        TPs[:,i]= env.TP
-    score = ((np.average(TPs))/np.average(best_tp) - 0.6)/0.4
+    score = 0
     return score
 
 def train(args):
@@ -62,16 +39,18 @@ def train(args):
     state = State(args.device, *env.get_state_batch(batch=nUE, action_id=10))
 
     # 推理设定 - 这一部分保存420个UE在0-200时间内的最佳TP以及随机动作得到的TP，便于后面计算分数
-    inference_ues = list(range(420))
-    start_time = 0
-    end_time = 200
-    best_data = None
     max_score = 0 # 记录最大分数，每次超过最大分数就保存一次模型
     
     # 开始训练
     frame_idx = 0
     loss = 0
     time = 0
+    loss_s = []    
+    reward_s = []    
+    ue_c_tp_s = [[],[],[],[],[]]
+    ue_acc_s = [[],[],[],[],[]]
+    eff_tp_s = []
+    bl_eff_tp_s = []
     while frame_idx < args.num_frame:
         action = agent.select_action(state)
         next_state = State(args.device, *env.get_state_batch(batch=nUE, action_id=action))
@@ -84,14 +63,25 @@ def train(args):
         if frame_idx % args.optim_frame == 0: # 反向传播更新梯度
             loss = agent.optim()
             if loss is not None:
+                opt_y_value, opt_rate, opt_ee = env.TD_allocate()
                 cell_writer.add_scalar("train/loss", loss, frame_idx)
                 cell_writer.add_scalar("train/reward", reward, frame_idx)
+                cell_writer.add_scalar("train/baseline_reward", opt_rate/100.0, frame_idx)
+                cell_writer.add_scalar("train/baseline_tp", opt_rate, frame_idx)
+                if frame_idx % 10 == 0:
+                    loss_s.append(loss)
+                    reward_s.append(reward)
+                    eff_tp_s.append(reward*100)
+                    bl_eff_tp_s.append(opt_rate)
                 for i in range(len(UE)):
                     c_rate = env.communication_rate()
                     acc = env.sensing_accuracy()
                     writers[i].add_scalar("UE actions", action, frame_idx)
                     writers[i].add_scalar("TP", c_rate[i], frame_idx)
                     writers[i].add_scalar("ACC", acc[:,i], frame_idx)
+                    if frame_idx % 10 == 0:
+                        ue_c_tp_s[i].append(c_rate[i])
+                        ue_acc_s[i].append(acc[:,i])
                     # pdb.set_trace()
                 agent.update_epsilon()
                 
@@ -105,6 +95,9 @@ def train(args):
                 torch.save(agent.net.state_dict(), f'{os.path.dirname(__file__)}/models/{args.daytime}_frame{frame_idx}_score{score}.mo')
                 max_score = score
         agent.train()
+    data = (loss_s,reward_s,ue_c_tp_s,ue_acc_s,eff_tp_s,bl_eff_tp_s)
+    with open('data.pickle', 'wb') as f:
+        pickle.dump(data, f)
             
 def train_env_init(args):
     # 设定随机种子
@@ -113,7 +106,7 @@ def train_env_init(args):
     torch.manual_seed(args.seed)
     
     # 初始化Log文件
-    args.daytime = datetime.datetime.now().strftime('BM_%Y-%m-%d-%H-%M-%S')
+    args.daytime = datetime.datetime.now().strftime('TD_%Y-%m-%d-%H-%M-%S')
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S',
                         level=logging.INFO,
