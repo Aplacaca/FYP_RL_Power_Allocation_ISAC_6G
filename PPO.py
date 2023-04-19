@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.normal import Normal
+from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.utils.tensorboard import SummaryWriter
 
 from env.mu_env import BS
@@ -25,7 +26,7 @@ def parse_args():
         help='the learning rate of the optimizer')
     parser.add_argument('--seed', type=int, default=1,
         help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=2000000,
+    parser.add_argument('--total-timesteps', type=int, default=1000000,
         help='total timesteps of the experiments')
     parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
         help='if toggled, `torch.backends.cudnn.deterministic=False`')
@@ -101,6 +102,7 @@ class Agent(nn.Module):
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 1), std=1.0),
+            nn.Tanh(),
         )
         self.actor_mean = nn.Sequential(
             layer_init(nn.Linear(128, 64)),
@@ -108,6 +110,8 @@ class Agent(nn.Module):
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 8), std=0.01),
+            nn.Tanh(),
+            
         )
         self.actor_logstd = nn.Parameter(torch.zeros(1, 8))
     
@@ -124,7 +128,10 @@ class Agent(nn.Module):
         probs = Normal(action_mean, action_std)
         if action is None:
             action = probs.sample()
-            action = torch.softmax(action, dim=-1)
+            with torch.no_grad():
+                action = torch.clamp(action,-3,3) + 4
+                action = action / action.sum()
+                # action = torch.softmax(action, dim=-1)
         return action, probs.log_prob(action).sum(-1), probs.entropy().sum(-1), self.critic(x)
 
 
@@ -138,13 +145,14 @@ if __name__ == "__main__":
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
 
+    
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cpu")
+    device = torch.device("cuda:0")
     # device = torch.device("cuda")
 
     # env setup
@@ -194,11 +202,13 @@ if __name__ == "__main__":
                 print("zero")
                 pdb.set_trace()
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, done = env.step(action.cpu().numpy())
+            next_obs, reward, done, bl_R_c, bl_R_est, bl_reward = env.step(action.cpu().numpy())
             # next_obs, reward, done = env.step()
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor([done]).to(device)
-            writer.add_scalar("reward", reward, global_step)
+            writer.add_scalar("reward/reward", reward, global_step)
+            writer.add_scalar("reward/baseline", bl_reward, global_step)
+            # writer.add_scalars("action/action_ue", {f"UE{i}":action[i] for i in range(8)}, global_step)
             
         # bootstrap value if not done
         with torch.no_grad():
@@ -282,10 +292,32 @@ if __name__ == "__main__":
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
 
+                # assert(torch.isnan(loss).sum() == 0), print("pg_loss-",pg_loss,"entropy_loss-",entropy_loss,"v_loss-",v_loss)
+                
+                # for check_key in agent.critic.state_dict().keys():
+                #     prm = agent.critic.state_dict()[check_key]
+                #     assert(torch.isnan(prm).sum() == 0),print("critic nan before backward")
+                    
+                # for check_key in agent.actor_mean.state_dict().keys():
+                #     prm = agent.actor_mean.state_dict()[check_key]
+                #     assert(torch.isnan(prm).sum() == 0),print("actor_mean nan before backward")
+                    
+                # assert(torch.isnan(agent.actor_logstd).sum() == 0),print("actor_logstd nan before backward")
+                
                 optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+                nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)         
                 optimizer.step()
+                
+                # for check_key in agent.critic.state_dict().keys():
+                #     prm = agent.critic.state_dict()[check_key]
+                #     assert(torch.isnan(prm).sum() == 0),pdb.set_trace()
+
+                # for check_key in agent.actor_mean.state_dict().keys():
+                #     prm = agent.actor_mean.state_dict()[check_key]
+                #     assert(torch.isnan(prm).sum() == 0),print("actor_mean nan after step")
+                
+                # assert(torch.isnan(agent.actor_logstd).sum() == 0),print("actor_logstd nan after step")
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:

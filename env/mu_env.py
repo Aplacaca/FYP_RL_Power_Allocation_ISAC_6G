@@ -14,7 +14,7 @@ class UE(object):
         self.N_r = N_r
         self.N_t = N_t
         # Channel Generation
-        self.d = np.random.rand()*2+1.0 # range{m}
+        self.d = np.random.rand()*10.0 # range{m}
         self.theta = theta# angle 0~pi
         self.g = (3*10e8/(4*np.pi*self.d*10*10e9))**2# PathLoss of Communication
         self.g_r = (3*10e8/(4*np.pi*(self.d**2)*10*10e9))**2# PathLoss of Radar
@@ -42,16 +42,16 @@ class UE(object):
         # print("g:", self.g)
 
     def update(self,):
-        # Channel Generation
-        self.d = np.random.rand()*20 # range{m}
-        self.theta = np.random.uniform()*np.pi# angle 0~pi
+         # Channel Generation
+        self.d = np.random.rand()*2+1.0 # range{m}
+        # self.theta = theta# angle 0~pi
         self.g = (3*10e8/(4*np.pi*self.d*10*10e9))**2# PathLoss of Communication
         self.g_r = (3*10e8/(4*np.pi*(self.d**2)*10*10e9))**2# PathLoss of Radar
         self.at = 1/np.sqrt(self.N_t)*np.expand_dims(np.exp(1j * np.arange(start=0, stop=self.N_t , step=1, dtype=np.complex128) * np.pi *np.sin(self.theta)), axis=-1)# Steering Vector
         self.ar = 1/np.sqrt(self.N_r)*np.expand_dims(np.exp(1j * np.arange(start=0, stop=self.N_r , step=1, dtype=np.complex128) * np.pi *np.sin(self.theta)), axis=-1)# Steering Vector
-        self.A = self.at@self.at.conjugate().transpose()
         self.h = np.sqrt(self.g)*np.sqrt(self.N_t*self.N_r)*self.ar@self.at.conjugate().transpose() # Communication Channel
         self.h_r = np.sqrt(self.g_r)*self.N_t*self.at@self.at.conjugate().transpose() # Radar Channel
+        self.A = self.at@self.at.conjugate().transpose()
         self.h_norm = np.linalg.norm(self.h)
         self.v = deepcopy(self.at)
         self.w = deepcopy(self.at)
@@ -194,13 +194,32 @@ class BS(object):
             UE = self.s_UE[_id]
             UE.P_s = Ps_s[_id]
     
+    def _equal_allocation(self,):
+        Pc_s = np.array([self.P_tot/self.N_c]*self.N_c)
+        Ps_s = np.array([self.P_tot/self.N_s]*self.N_s)
+        for _id in range(len(self.c_UE)):
+            UE = self.c_UE[_id]
+            UE.P_c = Pc_s[_id]
+        for _id in range(len(self.s_UE)):
+            UE = self.s_UE[_id]
+            UE.P_s = Ps_s[_id]
+        R_c, R_est = self.get_performance()
+        return R_c, R_est
+        
     def step(self, pa_ratio=None):
         done = 0
         if pa_ratio is None:
             power_allocation = np.array([10]*(self.N_c+self.N_s))
         else:
+            try:
+                assert(abs(np.sum(pa_ratio)-1)<1e-5)
+            except:
+                pdb.set_trace()
             power_allocation = pa_ratio*self.P_tot
-            
+        
+        # get basline PA
+        bl_R_c, bl_R_est = self._equal_allocation()
+        
         # apply PA
         self._power_allocation(Pc_s=power_allocation[0:self.N_c], Ps_s=power_allocation[self.N_c:])
         # calculate performance
@@ -209,7 +228,9 @@ class BS(object):
         self.Rc_s[self.time,:] = R_c
         self.Rs_s[self.time,:] = R_est
         # update env reward
-        self.reward = np.sum(self.Rc_s)/10000000.0+np.sum(self.Rs_s)/100000.0*0.5
+        self.reward = (np.sum(R_c)/10000000.0+np.sum(R_est)/100000.0*0.5)
+        bl_reward = (np.sum(bl_R_c)/10000000.0+np.sum(bl_R_est)/100000.0*0.5)
+        assert(np.isinf(self.reward).sum()==0)
         # get next state
         self.time += 1
         if self.time % self.max_time == 0:
@@ -217,17 +238,19 @@ class BS(object):
             done = 1
             reward = self.reward
             next_state,_ = self.reset()
-            return next_state,reward,done
+            bl_R_c, bl_R_est = self._equal_allocation()
+            bl_reward = (np.sum(bl_R_c)/10000000.0+np.sum(bl_R_est)/100000.0*0.5)
+            return next_state,reward,done,bl_R_c, bl_R_est, bl_reward
         self.update_channels()
         Full_Hc = np.concatenate([UE.h for UE in self.c_UE], axis=0).flatten()
         Full_Hr = np.concatenate([UE.h for UE in self.s_UE], axis=0).flatten()
         next_state = np.concatenate([Full_Hc,Full_Hr])
-        return next_state, self.reward, done
+        return next_state, self.reward, done, bl_R_c, bl_R_est, bl_reward
     
     def reset(self):
         done = 0
         self.time = 0
-        self.reward = 0
+        # self.reward = 0
         ##############################
         #           MEMORY           #
         ##############################
