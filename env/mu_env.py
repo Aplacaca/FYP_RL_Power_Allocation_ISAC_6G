@@ -114,16 +114,44 @@ class BS(object):
         T = 0.000001 # 1us
         sigma = 0.01 # Processing Noise
         # Get the Covariance Matrix of Total Transmitted Signal 
-        SUM_COMA = np.identity(self.N_t,dtype=np.complex128)*self.P_n
-        for _id in range(len(self.s_UE)):
-            UE = self.s_UE[_id]
+        SUM_COMA = np.zeros((self.N_t,self.N_t), dtype=np.complex128)
+        full_ue = self.s_UE+self.c_UE
+        for _id in range(len(full_ue)):
+            UE = full_ue[_id]
             SUM_COMA += UE.P_s*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate())
         for _id in range(len(self.s_UE)):
             UE = self.s_UE[_id]
             UE_ = self.s_UE[0:_id]+self.s_UE[_id+1:]+self.c_UE[:]
             P_in = 0 # Total inference signal power (without noise)
-            COMA = SUM_COMA - UE.P_s*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate())
-            UE.u = np.linalg.inv(COMA)@UE.A@UE.v@np.linalg.inv(UE.v.transpose().conjugate()@UE.A.transpose().conjugate()@np.linalg.inv(COMA)@UE.A@UE.v)
+            # COMA Calculated by DIFF
+            COMA_DIFF = SUM_COMA - UE.P_s*UE.h_r@UE.v@(UE.v.transpose().conjugate())@(UE.h_r.transpose().conjugate()) + np.identity(self.N_t,dtype=np.complex128)*self.P_n
+            CHECK_COMA = np.identity(self.N_t,dtype=np.complex128)*self.P_n
+            for check_id in range(len(UE_)):
+                UE_check = UE_[check_id]
+                CHECK_COMA += UE_check.P_s*UE_check.h_r@UE_check.v@(UE_check.v.transpose().conjugate())@(UE_check.h_r.transpose().conjugate()) 
+            # COMA Calculated by ADD
+            COMA = deepcopy(CHECK_COMA)            
+            try:
+                UE.u = np.linalg.inv(COMA)@UE.A@UE.v@np.linalg.inv(UE.v.transpose().conjugate()@UE.A.transpose().conjugate()@np.linalg.inv(COMA)@UE.A@UE.v)
+            except:
+                print("inv error")
+                fp = open("invlog.txt","w+")
+                print("inv error\r",file=fp)
+                print(f"Sensing user {UE.id} inv error\r",file=fp)
+                print(f"Interference users {[log_UE.id for log_UE in UE_]} inv error\r",file=fp)
+                print("COMA:\r",file=fp)
+                print(COMA,"\r",file=fp)
+                print("COMA_DIFF:\r",file=fp)
+                print(COMA_DIFF-COMA,"\r",file=fp)
+                
+                for logp in range(len(full_ue)):
+                    log_UE = full_ue[logp]
+                    log_coma = log_UE.P_s*log_UE.h_r@log_UE.v@(log_UE.v.transpose().conjugate())@(log_UE.h_r.transpose().conjugate())
+                    print(f"check UE {log_UE.id} COMA:\r",file=fp)
+                    print(log_coma,"###\r",file=fp)
+                    print(log_UE.id,file=fp)
+                fp.close()    
+                pdb.set_trace()
             UE.u = UE.u.transpose().conjugate()
             UE.u = 1/np.linalg.norm(UE.u)*UE.u
             # pdb.set_trace()
@@ -168,9 +196,11 @@ class BS(object):
     
     def step(self, pa_ratio=None):
         done = 0
-        power_allocation = pa_ratio*self.P_tot
-        if power_allocation is None:
+        if pa_ratio is None:
             power_allocation = np.array([10]*(self.N_c+self.N_s))
+        else:
+            power_allocation = pa_ratio*self.P_tot
+            
         # apply PA
         self._power_allocation(Pc_s=power_allocation[0:self.N_c], Ps_s=power_allocation[self.N_c:])
         # calculate performance
@@ -179,8 +209,7 @@ class BS(object):
         self.Rc_s[self.time,:] = R_c
         self.Rs_s[self.time,:] = R_est
         # update env reward
-        # self.reward = np.sum(self.Rc_s)/1000000.0
-        self.reward = 1.0
+        self.reward = np.sum(self.Rc_s)/10000000.0+np.sum(self.Rs_s)/100000.0*0.5
         # get next state
         self.time += 1
         if self.time % self.max_time == 0:
@@ -213,12 +242,15 @@ class BS(object):
 if __name__ == "__main__":
     np.random.seed(777)
     env = BS(N_t=16, N_c=5, N_s=3)
-    # env._power_allocation(Pc_s = [10,10,10,10,10], Ps_s = [10,10,10])
-    # env.get_performance()
-    ns,d = env.step()
-    pdb.set_trace()
-    # for i in range(0,400):
-    #     ns,d = env.step()
+    env._power_allocation(Pc_s = [10,10,10,10,10], Ps_s = [10,10,10])
+    env.get_performance(True)
+    
+    # ns,d = env.step()
+    for i in range(0,4000):
+        rio = np.random.rand(8)
+        rio = np.exp(rio)/np.sum(np.exp(rio))
+        ns,r,d = env.step()
     #     if d == 1:
     #         print(d)
+    pdb.set_trace()
     

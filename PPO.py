@@ -118,8 +118,9 @@ class Agent(nn.Module):
         action_mean = self.actor_mean(x)
         action_logstd = self.actor_logstd.squeeze(0)
         action_std = torch.exp(action_logstd)
-        # if torch.any(torch.isnan(action_mean)):
-        #     pdb.set_trace()
+        if torch.any(torch.isnan(action_mean)):
+            print("caught nan")
+            pdb.set_trace()
         probs = Normal(action_mean, action_std)
         if action is None:
             action = probs.sample()
@@ -189,21 +190,16 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
-            
-            
+            if torch.any(action < 1e-10):
+                print("zero")
+                pdb.set_trace()
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, done = env.step(action.cpu().numpy())
             # next_obs, reward, done = env.step()
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor([done]).to(device)
-
-            # for item in info:
-            #     if "episode" in item.keys():
-            #         print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
-            #         writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
-            #         writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
-            #         break
-
+            writer.add_scalar("reward", reward, global_step)
+            
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
