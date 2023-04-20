@@ -9,12 +9,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.normal import Normal
-from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.distributions import MultivariateNormal
 from torch.utils.tensorboard import SummaryWriter
 
 from env.mu_env import BS
 import pdb
-
+ACTION_DIM = 128
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
@@ -97,21 +97,18 @@ class Agent(nn.Module):
     def __init__(self, ):
         super(Agent, self).__init__()
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(128, 64)),
+            layer_init(nn.Linear(ACTION_DIM, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 1), std=1.0),
-            nn.Tanh(),
         )
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(128, 64)),
+            layer_init(nn.Linear(ACTION_DIM, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 8), std=0.01),
-            nn.Tanh(),
-            
         )
         self.actor_logstd = nn.Parameter(torch.zeros(1, 8))
     
@@ -125,13 +122,12 @@ class Agent(nn.Module):
         if torch.any(torch.isnan(action_mean)):
             print("caught nan")
             pdb.set_trace()
-        probs = Normal(action_mean, action_std)
+        # probs = Normal(action_mean, action_std)
+        
+        probs = MultivariateNormal(action_mean, torch.diag(action_std))
         if action is None:
             action = probs.sample()
-            with torch.no_grad():
-                action = torch.clamp(action,-3,3) + 4
-                action = action / action.sum()
-                # action = torch.softmax(action, dim=-1)
+
         return action, probs.log_prob(action).sum(-1), probs.entropy().sum(-1), self.critic(x)
 
 
@@ -165,7 +161,7 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, 128)).to(device)
+    obs = torch.zeros((args.num_steps, ACTION_DIM)).to(device)
     actions = torch.zeros((args.num_steps, 8)).to(device)
     logprobs = torch.zeros((args.num_steps, 1)).to(device)
     rewards = torch.zeros((args.num_steps, 1)).to(device)
@@ -198,11 +194,15 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
-            if torch.any(action < 1e-10):
-                print("zero")
-                pdb.set_trace()
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, done, bl_R_c, bl_R_est, bl_reward = env.step(action.cpu().numpy())
+            with torch.no_grad():
+                a_min = action.min() 
+                a_max = action.max()
+                action_ = (action - a_min) + 0.01
+                action_ = action_ / action_.sum()
+                # pdb.set_trace()
+                # action_ = torch.softmax(action, dim=-1)
+            next_obs, reward, done, bl_R_c, bl_R_est, bl_reward = env.step(action_.cpu().numpy())
             # next_obs, reward, done = env.step()
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor([done]).to(device)
@@ -239,7 +239,7 @@ if __name__ == "__main__":
                 advantages = returns - values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,128))
+        b_obs = obs.reshape((-1,ACTION_DIM))
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,8))
         b_advantages = advantages.reshape(-1)

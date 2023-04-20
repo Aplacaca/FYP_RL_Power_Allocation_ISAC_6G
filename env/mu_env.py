@@ -205,7 +205,23 @@ class BS(object):
             UE.P_s = Ps_s[_id]
         R_c, R_est = self.get_performance()
         return R_c, R_est
+    
+    def _seach_best_allocation(self,):
+        Pc_s = np.array([self.P_tot/self.N_c]*self.N_c)
+        Ps_s = np.array([self.P_tot/self.N_s]*self.N_s)
+        for _id in range(len(self.c_UE)):
+            UE = self.c_UE[_id]
+            UE.P_c = Pc_s[_id]
+        for _id in range(len(self.s_UE)):
+            UE = self.s_UE[_id]
+            UE.P_s = Ps_s[_id]
+        R_c, R_est = self.get_performance()
+        return R_c, R_est
         
+    
+    def _reward(self,R_c,R_est):
+        return (np.sum(R_c)/10000000.0+np.sum(R_est)/100000.0*0.5)
+    
     def step(self, pa_ratio=None):
         done = 0
         if pa_ratio is None:
@@ -228,8 +244,9 @@ class BS(object):
         self.Rc_s[self.time,:] = R_c
         self.Rs_s[self.time,:] = R_est
         # update env reward
-        self.reward = (np.sum(R_c)/10000000.0+np.sum(R_est)/100000.0*0.5)
-        bl_reward = (np.sum(bl_R_c)/10000000.0+np.sum(bl_R_est)/100000.0*0.5)
+        # self.reward = pa_ratio
+        self.reward = self._reward(R_c,R_est)
+        bl_reward = self._reward(bl_R_c,bl_R_est)
         assert(np.isinf(self.reward).sum()==0)
         # get next state
         self.time += 1
@@ -239,13 +256,21 @@ class BS(object):
             reward = self.reward
             next_state,_ = self.reset()
             bl_R_c, bl_R_est = self._equal_allocation()
-            bl_reward = (np.sum(bl_R_c)/10000000.0+np.sum(bl_R_est)/100000.0*0.5)
+            bl_reward = self._reward(bl_R_c,bl_R_est)
             return next_state,reward,done,bl_R_c, bl_R_est, bl_reward
         self.update_channels()
+        next_state = self._get_state()
+        # next_state = np.concatenate([Full_Hc,Full_Hr])
+        return next_state, self.reward, done, bl_R_c, bl_R_est, bl_reward
+    
+    def _get_state(self,):
         Full_Hc = np.concatenate([UE.h for UE in self.c_UE], axis=0).flatten()
         Full_Hr = np.concatenate([UE.h for UE in self.s_UE], axis=0).flatten()
-        next_state = np.concatenate([Full_Hc,Full_Hr])
-        return next_state, self.reward, done, bl_R_c, bl_R_est, bl_reward
+        Full_d = np.array([UE.d for UE in self.c_UE+self.s_UE]).flatten()/10.0
+        Full_theta = np.array([UE.theta for UE in self.c_UE+self.s_UE]).flatten()/np.pi
+        next_state = np.concatenate([Full_Hc,Full_Hr],axis=0)
+        # next_state = np.concatenate([Full_d,Full_theta])
+        return next_state
     
     def reset(self):
         done = 0
@@ -256,9 +281,7 @@ class BS(object):
         ##############################
         self.Rc_s = np.zeros((self.max_time,self.N_c))
         self.Rs_s = np.zeros((self.max_time,self.N_s))
-        Full_Hc = np.concatenate([UE.h for UE in self.c_UE], axis=0).flatten()
-        Full_Hr = np.concatenate([UE.h for UE in self.s_UE], axis=0).flatten()
-        next_state = np.concatenate([Full_Hc,Full_Hr])
+        next_state = self._get_state()
         return next_state,done
         
 
