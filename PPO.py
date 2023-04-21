@@ -3,6 +3,7 @@ import os
 import random
 import time
 from distutils.util import strtobool
+import datetime
 
 import numpy as np
 import torch
@@ -19,6 +20,8 @@ ACTION_DIM = 4
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
+    parser.add_argument('--daytime', type=str, default=datetime.datetime.now().strftime('TD_%Y-%m-%d-%H-%M-%S'),
+        help='the time of this experiment')
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
         help='the name of this experiment')
     parser.add_argument('--gym-id', type=str, default="HalfCheetah",
@@ -101,7 +104,7 @@ class Agent(nn.Module):
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, ACTION_DIM), std=0.01),
-            nn.Sigmoid(),
+            nn.Sigmoid(), # 4.21 W SIGMOID
         )
         self.actor_logstd = nn.Parameter(torch.zeros(1, ACTION_DIM))
         # self.actor_logstd = 0.2*(torch.zeros(1, 8)).to(torch.device("cuda:0"))
@@ -127,8 +130,7 @@ class Agent(nn.Module):
 
 if __name__ == "__main__":
     args = parse_args()
-    run_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-
+    run_name = f"PPO_PA__{args.exp_name}__{args.seed}__{args.daytime}"
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
@@ -153,6 +155,8 @@ if __name__ == "__main__":
     env = BS(N_t=16, N_c=5, N_s=3)
     agent = Agent().to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, STATE_DIM)).to(device)
@@ -324,15 +328,19 @@ if __name__ == "__main__":
                 #     assert(torch.isnan(prm).sum() == 0),print("actor_mean nan after step")
                 
                 # assert(torch.isnan(agent.actor_logstd).sum() == 0),print("actor_logstd nan after step")
-
+        if update%100 == 0:
+            if not os.path.exists(f'{os.path.dirname(__file__)}/models/PPO_{args.daytime}/'):
+                os.mkdir(f'{os.path.dirname(__file__)}/models/PPO_{args.daytime}/')
+            torch.save(agent.state_dict(), \
+                f'{os.path.dirname(__file__)}/models/PPO_{args.daytime}/update_{update}.mo')
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
+        
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
@@ -344,3 +352,5 @@ if __name__ == "__main__":
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
     writer.close()
+    
+    torch.save(agent.state_dict(), f'{os.path.dirname(__file__)}/models/PPO_{args.daytime}_update_{update}.mo')

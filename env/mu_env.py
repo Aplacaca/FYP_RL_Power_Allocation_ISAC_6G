@@ -41,10 +41,12 @@ class UE(object):
         # print("range:", self.d)
         # print("g:", self.g)
 
-    def update(self,):
+    def update(self,rand_theta=True):
          # Channel Generation
-        self.d = np.random.rand()*2+1.0 # range{m}
-        # self.theta = theta# angle 0~pi
+        # self.d = np.random.rand()*2+1.0 # range{m}
+        self.d = np.random.rand()*10.0 # range{m}
+        if rand_theta:
+            self.theta = np.random.rand()*np.pi# angle 0~pi
         self.g = (3*10e8/(4*np.pi*self.d*10*10e9))**2# PathLoss of Communication
         self.g_r = (3*10e8/(4*np.pi*(self.d**2)*10*10e9))**2# PathLoss of Radar
         self.at = 1/np.sqrt(self.N_t)*np.expand_dims(np.exp(1j * np.arange(start=0, stop=self.N_t , step=1, dtype=np.complex128) * np.pi *np.sin(self.theta)), axis=-1)# Steering Vector
@@ -170,6 +172,7 @@ class BS(object):
     
     def _cal_radar(self, update=True):   
         R_est = []
+        Sinr_r = []
         # Radar Processing Params 
         duty_factor = 0.1 # Pulse Duration Interval / Pulse Repetition Interval
         T = 0.000001 # 1us
@@ -197,13 +200,14 @@ class BS(object):
             P_useful = np.linalg.norm(UE.u@UE.h_r@UE.v)**2*UE.P_s
             R_ = duty_factor/(2*T) * np.log2(1 + 4*(np.pi**2)*(sigma**2)*(self.B_s**2)*T*P_useful/(self.P_n*np.linalg.norm(UE.u)**2+P_in))
             R_est.append(R_)
+            Sinr_r.append(P_useful/(self.P_n*np.linalg.norm(UE.u)**2+P_in))
             # print("RSINR (dB):",10*np.log10(P_useful/(self.P_n*np.linalg.norm(UE.u)**2+P_in)) )
             # print("RSINR_MDVR:",np.abs(UE.P_s*(UE.v.transpose().conjugate()@UE.h_r.transpose().conjugate()@np.linalg.inv(COMA)@UE.h_r@UE.v)) )
             # print("Pin: ",P_in)
             # print("P_useful: ",P_useful)
             # print("N: ",(self.P_n*np.linalg.norm(UE.u)**2))
             # pdb.set_trace()
-        return R_est
+        return Sinr_r, R_est
     
     
     def update_channels(self,):
@@ -216,10 +220,11 @@ class BS(object):
             UE.update()
 
     def get_performance(self, print_log=False):
-        Sinr, R_c = self._cal_zf()
-        R_est = self._cal_radar()
+        Sinr_c, R_c = self._cal_zf()
+        Sinr_r, R_est = self._cal_radar()
         if print_log:
-            print("Sinr (dB)", 10*np.log(Sinr))
+            print("C Sinr (dB)", 10*np.log(Sinr_c))
+            print("S Sinr (dB)", 10*np.log(Sinr_r))
             print("R_c", R_c)
             print("R_est", R_est)
         return R_c, R_est
@@ -250,7 +255,12 @@ class BS(object):
     
     def _penalty(self,pa_ratio):
         sum_ratio = np.sum(pa_ratio) 
-        return (sum_ratio - 1)>1e-4
+        # return (sum_ratio - 1)>1e-4 # upper bounded penalty
+        return (sum_ratio - 1)>1e-4 and (1-sum_ratio)>1e-1# upper bounded penalty
+        
+    def _penalty_lower(self,pa_ratio):
+        sum_ratio = np.sum(pa_ratio) 
+        return (1-sum_ratio)>1e-1 # LOWER bounded penalty
     
     def step(self, pa_ratio=None, freeze=False):
         done = 0
@@ -264,6 +274,10 @@ class BS(object):
             pa_ratio_[self.N_c:] = pa_ratio[1:]
             power_allocation = pa_ratio_*self.P_tot
             _penalty = self._penalty(pa_ratio_)
+            _penalty_lower = self._penalty_lower(pa_ratio_)
+            if np.sum(pa_ratio_)-1.0 > 1e-4:
+                pa_ratio_ = pa_ratio_/np.sum(pa_ratio_)
+            assert(np.sum(pa_ratio_)-1.0 <= 1e-4)
         
         # get basline PA
         bl_R_c, bl_R_est = self._equal_allocation()
@@ -277,7 +291,8 @@ class BS(object):
         self.Rs_s[self.time,:] = R_est
         # update env reward
         # self.reward = pa_ratio
-        # self.reward = (_penalty==0)*10+(_penalty==1)*-10
+        # self.reward = (_penalty==0)*10+(_penalty==1)*-10 +\
+        #     (_penalty_lower==0)*10+(_penalty_lower==1)*-10#*np.abs(1-np.sum(pa_ratio_))
         self.reward = (_penalty==0)*10*self._reward(R_c,R_est)/50.0 + (_penalty==1)*-10
         bl_reward = self._reward(bl_R_c,bl_R_est)/50.0*10
         assert(np.isinf(self.reward).sum()==0)
