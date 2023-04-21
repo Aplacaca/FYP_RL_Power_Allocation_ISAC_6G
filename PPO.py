@@ -14,7 +14,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from env.mu_env import BS
 import pdb
-ACTION_DIM = 128
+STATE_DIM = 128
+ACTION_DIM = 4
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
@@ -26,7 +27,7 @@ def parse_args():
         help='the learning rate of the optimizer')
     parser.add_argument('--seed', type=int, default=1,
         help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=1000000,
+    parser.add_argument('--total-timesteps', type=int, default=2000000,
         help='total timesteps of the experiments')
     parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
         help='if toggled, `torch.backends.cudnn.deterministic=False`')
@@ -79,38 +80,31 @@ def parse_args():
     return args
 
 
-def make_env(gym_id, seed, idx, capture_video, run_name):
-    def thunk():
-        env=0
-        return env
-
-    return thunk
-
-
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-
 class Agent(nn.Module):
     def __init__(self, ):
         super(Agent, self).__init__()
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(ACTION_DIM, 64)),
+            layer_init(nn.Linear(STATE_DIM, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 1), std=1.0),
         )
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(ACTION_DIM, 64)),
+            layer_init(nn.Linear(STATE_DIM, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 8), std=0.01),
+            layer_init(nn.Linear(64, ACTION_DIM), std=0.01),
+            nn.Sigmoid(),
         )
-        self.actor_logstd = nn.Parameter(torch.zeros(1, 8))
+        self.actor_logstd = nn.Parameter(torch.zeros(1, ACTION_DIM))
+        # self.actor_logstd = 0.2*(torch.zeros(1, 8)).to(torch.device("cuda:0"))
     
     def get_value(self, x):
         return self.critic(x)
@@ -122,9 +116,9 @@ class Agent(nn.Module):
         if torch.any(torch.isnan(action_mean)):
             print("caught nan")
             pdb.set_trace()
-        # probs = Normal(action_mean, action_std)
+        probs = Normal(action_mean, action_std)
         
-        probs = MultivariateNormal(action_mean, torch.diag(action_std))
+        # probs = MultivariateNormal(action_mean, torch.diag(action_std))
         if action is None:
             action = probs.sample()
 
@@ -161,8 +155,8 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, ACTION_DIM)).to(device)
-    actions = torch.zeros((args.num_steps, 8)).to(device)
+    obs = torch.zeros((args.num_steps, STATE_DIM)).to(device)
+    actions = torch.zeros((args.num_steps, ACTION_DIM)).to(device)
     logprobs = torch.zeros((args.num_steps, 1)).to(device)
     rewards = torch.zeros((args.num_steps, 1)).to(device)
     dones = torch.zeros((args.num_steps, 1)).to(device)
@@ -183,6 +177,8 @@ if __name__ == "__main__":
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
+        episode_reward = 0.0
+        bl_episode_reward = 0.0
         for step in range(0, args.num_steps):
             global_step += 1
             obs[step] = next_obs
@@ -196,12 +192,17 @@ if __name__ == "__main__":
             logprobs[step] = logprob
             # TRY NOT TO MODIFY: execute the game and log data.
             with torch.no_grad():
-                a_min = action.min() 
-                a_max = action.max()
-                action_ = (action - a_min) + 0.01
-                action_ = action_ / action_.sum()
-                # pdb.set_trace()
+                # action_ = action
+                action_ = action.clamp(min=0.01)
+                ##############
+                # a_min = action.min() 
+                # a_max = action.max()
+                # action_ = (action - a_min) + 0.01
+                # action_ = action_ / action_.sum()
+                ##############
                 # action_ = torch.softmax(action, dim=-1)
+                ##############
+                # pdb.set_trace()
             next_obs, reward, done, bl_R_c, bl_R_est, bl_reward = env.step(action_.cpu().numpy())
             # next_obs, reward, done = env.step()
             rewards[step] = torch.tensor(reward).to(device).view(-1)
@@ -209,6 +210,11 @@ if __name__ == "__main__":
             writer.add_scalar("reward/reward", reward, global_step)
             writer.add_scalar("reward/baseline", bl_reward, global_step)
             # writer.add_scalars("action/action_ue", {f"UE{i}":action[i] for i in range(8)}, global_step)
+            episode_reward += reward
+            bl_episode_reward += bl_reward
+        writer.add_scalar("reward/epoch_mean", episode_reward/args.num_steps, global_step)
+        writer.add_scalar("reward/bl_epoch_mean", bl_episode_reward/args.num_steps, global_step)
+        
             
         # bootstrap value if not done
         with torch.no_grad():
@@ -239,9 +245,9 @@ if __name__ == "__main__":
                 advantages = returns - values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,ACTION_DIM))
+        b_obs = obs.reshape((-1,STATE_DIM))
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,8))
+        b_actions = actions.reshape((-1,ACTION_DIM))
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)

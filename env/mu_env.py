@@ -90,7 +90,7 @@ class BS(object):
         
         for _id in range(len(self.c_UE)):
             UE = self.c_UE[_id]
-            UE.w = Full_W[:,_id]#*1/np.sqrt(np.trace(UE.h@UE.h.transpose().conjugate()))
+            UE.w = Full_W[:,_id]
         for _id in range(len(self.c_UE)):
             UE = self.c_UE[_id]
             UE_in = self.c_UE[0:_id] + self.c_UE[_id+1:]
@@ -107,7 +107,7 @@ class BS(object):
             
         return Sinr,R_c 
 
-    def _cal_radar(self, update=True):   
+    def _cal_radar_v0(self, update=True):   
         R_est = []
         # Radar Processing Params 
         duty_factor = 0.1 # Pulse Duration Interval / Pulse Repetition Interval
@@ -167,7 +167,45 @@ class BS(object):
             # print("N: ",(self.P_n*np.linalg.norm(UE.u)**2))
             # pdb.set_trace()
         return R_est
-        
+    
+    def _cal_radar(self, update=True):   
+        R_est = []
+        # Radar Processing Params 
+        duty_factor = 0.1 # Pulse Duration Interval / Pulse Repetition Interval
+        T = 0.000001 # 1us
+        sigma = 0.01 # Processing Noise
+        full_ue = self.s_UE+self.c_UE
+        # Get the Covariance Matrix of Total Transmitted Signal 
+        for _id in range(len(self.s_UE)):
+            UE = self.s_UE[_id]
+            UE_ = self.s_UE[0:_id]+self.s_UE[_id+1:]+self.c_UE[:]
+            P_in = 0 # Total inference signal power (without noise)
+            # COMA Calculated by DIFF
+            CHECK_COMA = np.identity(self.N_t,dtype=np.complex128)*self.P_n
+            for check_id in range(len(UE_)):
+                UE_check = UE_[check_id]
+                CHECK_COMA += UE.P_s*UE_check.h_r@UE.v@(UE.v.transpose().conjugate())@(UE_check.h_r.transpose().conjugate()) 
+            # COMA Calculated by ADD
+            COMA = deepcopy(CHECK_COMA)   
+            #         
+            UE.u = np.linalg.inv(COMA)@UE.A@UE.v@np.linalg.inv(UE.v.transpose().conjugate()@UE.A.transpose().conjugate()@np.linalg.inv(COMA)@UE.A@UE.v)
+            UE.u = UE.u.transpose().conjugate()
+            UE.u = 1/np.linalg.norm(UE.u)*UE.u
+            # pdb.set_trace()
+            for UE_in in UE_:
+                P_in += np.linalg.norm(UE.u@UE_in.h_r@UE.v)**2*UE.P_s
+            P_useful = np.linalg.norm(UE.u@UE.h_r@UE.v)**2*UE.P_s
+            R_ = duty_factor/(2*T) * np.log2(1 + 4*(np.pi**2)*(sigma**2)*(self.B_s**2)*T*P_useful/(self.P_n*np.linalg.norm(UE.u)**2+P_in))
+            R_est.append(R_)
+            # print("RSINR (dB):",10*np.log10(P_useful/(self.P_n*np.linalg.norm(UE.u)**2+P_in)) )
+            # print("RSINR_MDVR:",np.abs(UE.P_s*(UE.v.transpose().conjugate()@UE.h_r.transpose().conjugate()@np.linalg.inv(COMA)@UE.h_r@UE.v)) )
+            # print("Pin: ",P_in)
+            # print("P_useful: ",P_useful)
+            # print("N: ",(self.P_n*np.linalg.norm(UE.u)**2))
+            # pdb.set_trace()
+        return R_est
+    
+    
     def update_channels(self,):
         # Update Communication UE Channel
         for UE in self.c_UE:
@@ -195,20 +233,8 @@ class BS(object):
             UE.P_s = Ps_s[_id]
     
     def _equal_allocation(self,):
-        Pc_s = np.array([self.P_tot/self.N_c]*self.N_c)
-        Ps_s = np.array([self.P_tot/self.N_s]*self.N_s)
-        for _id in range(len(self.c_UE)):
-            UE = self.c_UE[_id]
-            UE.P_c = Pc_s[_id]
-        for _id in range(len(self.s_UE)):
-            UE = self.s_UE[_id]
-            UE.P_s = Ps_s[_id]
-        R_c, R_est = self.get_performance()
-        return R_c, R_est
-    
-    def _seach_best_allocation(self,):
-        Pc_s = np.array([self.P_tot/self.N_c]*self.N_c)
-        Ps_s = np.array([self.P_tot/self.N_s]*self.N_s)
+        Pc_s = np.array([self.P_tot/(self.N_c+self.N_s)]*self.N_c)
+        Ps_s = np.array([self.P_tot/(self.N_c+self.N_s)]*self.N_s)
         for _id in range(len(self.c_UE)):
             UE = self.c_UE[_id]
             UE.P_c = Pc_s[_id]
@@ -222,16 +248,22 @@ class BS(object):
     def _reward(self,R_c,R_est):
         return (np.sum(R_c)/10000000.0+np.sum(R_est)/100000.0*0.5)
     
-    def step(self, pa_ratio=None):
+    def _penalty(self,pa_ratio):
+        sum_ratio = np.sum(pa_ratio) 
+        return (sum_ratio - 1)>1e-4
+    
+    def step(self, pa_ratio=None, freeze=False):
         done = 0
+        _penalty = 0
         if pa_ratio is None:
-            power_allocation = np.array([10]*(self.N_c+self.N_s))
+            power_allocation = np.array([self.P_tot/(self.N_c+self.N_s)]*(self.N_c+self.N_s))
         else:
-            try:
-                assert(abs(np.sum(pa_ratio)-1)<1e-5)
-            except:
-                pdb.set_trace()
-            power_allocation = pa_ratio*self.P_tot
+            # EQUAL COMM POWER
+            pa_ratio_ = np.zeros(self.N_c+self.N_s)
+            pa_ratio_[0:self.N_c] = pa_ratio[0]/self.N_c
+            pa_ratio_[self.N_c:] = pa_ratio[1:]
+            power_allocation = pa_ratio_*self.P_tot
+            _penalty = self._penalty(pa_ratio_)
         
         # get basline PA
         bl_R_c, bl_R_est = self._equal_allocation()
@@ -245,8 +277,9 @@ class BS(object):
         self.Rs_s[self.time,:] = R_est
         # update env reward
         # self.reward = pa_ratio
-        self.reward = self._reward(R_c,R_est)
-        bl_reward = self._reward(bl_R_c,bl_R_est)
+        # self.reward = (_penalty==0)*10+(_penalty==1)*-10
+        self.reward = (_penalty==0)*10*self._reward(R_c,R_est)/50.0 + (_penalty==1)*-10
+        bl_reward = self._reward(bl_R_c,bl_R_est)/50.0*10
         assert(np.isinf(self.reward).sum()==0)
         # get next state
         self.time += 1
@@ -255,10 +288,9 @@ class BS(object):
             done = 1
             reward = self.reward
             next_state,_ = self.reset()
-            bl_R_c, bl_R_est = self._equal_allocation()
-            bl_reward = self._reward(bl_R_c,bl_R_est)
             return next_state,reward,done,bl_R_c, bl_R_est, bl_reward
-        self.update_channels()
+        if not freeze:
+            self.update_channels()
         next_state = self._get_state()
         # next_state = np.concatenate([Full_Hc,Full_Hr])
         return next_state, self.reward, done, bl_R_c, bl_R_est, bl_reward
